@@ -1,0 +1,21 @@
+# Dockerfile pour le scheduler de collecte automatique Binance
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Dépendances système
+RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
+
+# Dépendances Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Code source
+COPY src/ ./src/
+
+# Répertoire de logs
+RUN mkdir -p /app/logs
+
+# Lancement du scheduler
+CMD ["python", "-u", "src/data/scheduler.py"]
+

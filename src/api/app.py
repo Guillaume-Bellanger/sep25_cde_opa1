@@ -6,17 +6,19 @@ from datetime import datetime
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from pymongo.database import Database
+import asyncio
 
 # Add src directory to Python path to allow imports
 src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if src_dir not in sys.path:
-    sys.path.insert(0, src_dir)
+  sys.path.insert(0, src_dir)
 
 from data.config import SETTINGS
+from data.stream_data import BinanceStreamClient
 from api.queries import (
   get_symbols,
   get_intervals,
@@ -42,6 +44,10 @@ logger = logging.getLogger("CRYPTO_API")
 # Global database connection
 mongo_client: Optional[MongoClient] = None
 mongo_db: Optional[Database] = None
+
+# Active WebSocket connections
+active_streams: dict[str, BinanceStreamClient] = {}
+websocket_connections: dict[str, List[WebSocket]] = {}
 
 
 @asynccontextmanager
@@ -75,7 +81,10 @@ async def lifespan(app: FastAPI):
 
   yield
 
-  # Shutdown: Close MongoDB connection
+  # Shutdown: Close streams and MongoDB connection
+  for stream in active_streams.values():
+    stream.stop()
+
   if mongo_client:
     mongo_client.close()
     logger.info("Closed MongoDB connection")
@@ -315,6 +324,138 @@ async def get_statistics(
   except Exception as e:
     logger.error(f"Error fetching statistics: {e}")
     raise HTTPException(status_code=500, detail=f"Error fetching statistics: {str(e)}")
+
+
+@app.websocket("/ws/stream/{symbol}")
+async def websocket_stream(websocket: WebSocket, symbol: str):
+  """
+  WebSocket endpoint pour recevoir les données de trading en temps réel.
+
+  - **symbol**: Symbole de crypto (ex: BTCUSDT)
+
+  Example (JavaScript):
+      const ws = new WebSocket('ws://localhost:8000/ws/stream/BTCUSDT');
+      ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          console.log(`${data.symbol}: $${data.price}`);
+      };
+  """
+  await websocket.accept()
+  symbol_upper = symbol.upper()
+
+  logger.info(f"WebSocket client connected for {symbol_upper}")
+
+  # Ajouter cette connexion à la liste
+  if symbol_upper not in websocket_connections:
+    websocket_connections[symbol_upper] = []
+  websocket_connections[symbol_upper].append(websocket)
+
+  # Stocker le loop de l'événement pour pouvoir y accéder depuis le thread
+  loop = asyncio.get_event_loop()
+
+  try:
+    # Démarrer un stream si ce n'est pas déjà fait pour ce symbole
+    if symbol_upper not in active_streams:
+      def broadcast_trade(trade_data):
+        """Broadcast les données à tous les clients WebSocket connectés."""
+        if symbol_upper in websocket_connections:
+          # Utiliser run_coroutine_threadsafe pour appeler la coroutine depuis un thread
+          asyncio.run_coroutine_threadsafe(
+            send_to_all_clients(symbol_upper, trade_data),
+            loop
+          )
+
+      stream_client = BinanceStreamClient(
+        symbols=[symbol],
+        db=mongo_db,
+        callback=broadcast_trade
+      )
+      stream_client.start()
+      active_streams[symbol_upper] = stream_client
+      logger.info(f"Started new stream for {symbol_upper}")
+
+    # Garder la connexion ouverte
+    while True:
+      # Attendre des messages du client (principalement pour détecter la déconnexion)
+      try:
+        data = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
+        # On peut gérer des commandes du client ici si nécessaire
+        if data == "ping":
+          await websocket.send_json({"type": "pong"})
+      except asyncio.TimeoutError:
+        # Timeout normal, continuer
+        continue
+
+  except WebSocketDisconnect:
+    logger.info(f"WebSocket client disconnected for {symbol_upper}")
+  except Exception as e:
+    logger.error(f"WebSocket error for {symbol_upper}: {e}")
+  finally:
+    # Retirer cette connexion de la liste
+    if symbol_upper in websocket_connections:
+      websocket_connections[symbol_upper].remove(websocket)
+
+      # Si plus aucune connexion pour ce symbole, arrêter le stream
+      if not websocket_connections[symbol_upper]:
+        if symbol_upper in active_streams:
+          active_streams[symbol_upper].stop()
+          del active_streams[symbol_upper]
+          logger.info(f"Stopped stream for {symbol_upper} (no more clients)")
+        del websocket_connections[symbol_upper]
+
+
+async def send_to_all_clients(symbol: str, trade_data: dict):
+  """
+  Envoie les données de trade à tous les clients WebSocket connectés pour un symbole.
+
+  Args:
+      symbol: Symbole de crypto
+      trade_data: Données du trade
+  """
+  if symbol not in websocket_connections:
+    return
+
+  # Préparer le message
+  message = {
+    "symbol": trade_data["symbol"],
+    "price": trade_data["price"],
+    "quantity": trade_data["quantity"],
+    "timestamp": trade_data["timestamp"].isoformat(),
+    "trade_id": trade_data["trade_id"],
+    "is_buyer_maker": trade_data["is_buyer_maker"]
+  }
+
+  # Envoyer à tous les clients
+  disconnected = []
+  for ws in websocket_connections[symbol]:
+    try:
+      await ws.send_json(message)
+    except Exception as e:
+      logger.error(f"Error sending to client: {e}")
+      disconnected.append(ws)
+
+  # Retirer les connexions qui ont échoué
+  for ws in disconnected:
+    websocket_connections[symbol].remove(ws)
+
+
+@app.get("/api/stream/active")
+async def get_active_streams():
+  """
+  Obtenir la liste des streams actifs.
+
+  Returns:
+      Liste des symboles avec streams actifs et nombre de clients connectés
+  """
+  return {
+    "active_streams": [
+      {
+        "symbol": symbol,
+        "connected_clients": len(websocket_connections.get(symbol, []))
+      }
+      for symbol in active_streams.keys()
+    ]
+  }
 
 
 if __name__ == "__main__":

@@ -77,7 +77,7 @@ services:
       # Binance API URLs
       URL_HISTORIQUE: ${URL_HISTORIQUE:-https://api.binance.com/api/v3/klines}
       URL_STREAM: ${URL_STREAM:-wss://stream.binance.com:9443/ws}
-      # Auto-populate data on first run (set to 'false' to skip)
+      # Autopopulate data on first run (set to 'false' to skip)
       POPULATE_DATA: ${POPULATE_DATA:-false}
     volumes:
       - ./src:/app/src
@@ -96,6 +96,69 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # Dash Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: sep25_opa1_dashboard
+    ports:
+      - "8050:8050"
+    environment:
+      # API endpoint (dashboard will connect to the API)
+      API_BASE_URL: http://api:8000
+      # MongoDB settings (for streaming)
+      MONGO_HOST: mongo
+      MONGO_PORT: 27017
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_DB: ${MONGO_DB}
+      # Python unbuffered output for better logging
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./src:/app/src
+      - ./logs:/app/logs
+    networks:
+      - sep25_opa1_network
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8050', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Scheduler — collecte quotidienne des données Binance vers MongoDB
+  # TODO: remplacer par Apache Airflow (Sprint 5)
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.scheduler
+    container_name: sep25_opa1_scheduler
+    environment:
+      MONGO_HOST: mongo
+      MONGO_PORT: 27017
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_DB: ${MONGO_DB}
+      MONGO_COLLECTION_HISTORICAL: ${MONGO_COLLECTION_HISTORICAL:-historical_daily_data}
+      URL_HISTORIQUE: ${URL_HISTORIQUE:-https://api.binance.com/api/v3/klines}
+      # Heure de collecte quotidienne HH:MM UTC (défaut 01:00 = 02h/03h Paris)
+      COLLECT_TIME: ${COLLECT_TIME:-01:00}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./src:/app/src
+      - ./logs:/app/logs
+    networks:
+      - sep25_opa1_network
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   pg_data:

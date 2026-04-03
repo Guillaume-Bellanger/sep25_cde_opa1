@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Stream - Test WebSocket</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .controls {
+            padding: 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .control-group label {
+            font-weight: bold;
+            color: #495057;
+        }
+
+        .control-group select,
+        .control-group input {
+            padding: 10px 15px;
+            border: 2px solid #dee2e6;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+
+        .control-group button {
+            padding: 10px 25px;
+            border: none;
+            border-radius: 5px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-connect {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-connect:hover {
+            background: #218838;
+        }
+
+        .btn-disconnect {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-disconnect:hover {
+            background: #c82333;
+        }
+
+        .btn-clear {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-clear:hover {
+            background: #5a6268;
+        }
+
+        .status {
+            padding: 15px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            text-align: center;
+        }
+
+        .stat-card .label {
+            font-size: 0.9em;
+            color: #6c757d;
+            margin-bottom: 10px;
+        }
+
+        .stat-card .value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #495057;
+        }
+
+        .stat-card.price .value {
+            color: #667eea;
+        }
+
+        .trades {
+            padding: 20px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .trade-item {
+            padding: 15px;
+            margin-bottom: 10px;
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .trade-item.buy {
+            border-left-color: #28a745;
+        }
+
+        .trade-item.sell {
+            border-left-color: #dc3545;
+        }
+
+        .trade-info {
+            flex: 1;
+        }
+
+        .trade-price {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .trade-details {
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+
+        .trade-time {
+            font-size: 0.85em;
+            color: #adb5bd;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>🚀 Crypto Stream</h1>
+        <p>Test WebSocket en temps réel - Binance Data</p>
+    </div>
+
+    <div class="controls">
+        <div class="control-group">
+            <label for="symbol">Symbole:</label>
+            <select id="symbol">
+                <option value="BTCUSDT">BTC/USDT</option>
+                <option value="ETHUSDT">ETH/USDT</option>
+                <option value="SOLUSDT">SOL/USDT</option>
+            </select>
+
+            <label for="apiUrl">API URL:</label>
+            <input type="text" id="apiUrl" value="ws://localhost:8000" style="width: 250px;">
+
+            <button id="connectBtn" class="btn-connect">Connecter</button>
+            <button id="disconnectBtn" class="btn-disconnect" disabled>Déconnecter</button>
+            <button id="clearBtn" class="btn-clear">Effacer</button>
+        </div>
+    </div>
+
+    <div id="status" class="status disconnected">
+        ⚫ Déconnecté
+    </div>
+
+    <div class="stats">
+        <div class="stat-card price">
+            <div class="label">Prix actuel</div>
+            <div class="value" id="currentPrice">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Trades reçus</div>
+            <div class="value" id="tradeCount">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Prix min</div>
+            <div class="value" id="minPrice">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Prix max</div>
+            <div class="value" id="maxPrice">-</div>
+        </div>
+    </div>
+
+    <div class="trades" id="tradesContainer">
+        <p style="text-align: center; color: #6c757d;">
+            En attente de connexion...
+        </p>
+    </div>
+</div>
+
+<script>
+  let ws = null;
+  let tradeCount = 0;
+  let minPrice = null;
+  let maxPrice = null;
+
+  const connectBtn = document.getElementById('connectBtn');
+  const disconnectBtn = document.getElementById('disconnectBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const symbolSelect = document.getElementById('symbol');
+  const apiUrlInput = document.getElementById('apiUrl');
+  const statusDiv = document.getElementById('status');
+  const tradesContainer = document.getElementById('tradesContainer');
+
+  function updateStatus(status, message) {
+    statusDiv.className = `status ${status}`;
+
+    const icons = {
+      connected: '🟢',
+      disconnected: '⚫',
+      connecting: '🟡'
+    };
+
+    statusDiv.textContent = `${icons[status]} ${message}`;
+  }
+
+  function updateStats(price) {
+    document.getElementById('currentPrice').textContent = `$${price.toFixed(2)}`;
+    document.getElementById('tradeCount').textContent = tradeCount;
+
+    if (minPrice === null || price < minPrice) {
+      minPrice = price;
+      document.getElementById('minPrice').textContent = `$${minPrice.toFixed(2)}`;
+    }
+
+    if (maxPrice === null || price > maxPrice) {
+      maxPrice = price;
+      document.getElementById('maxPrice').textContent = `$${maxPrice.toFixed(2)}`;
+    }
+  }
+
+  function addTrade(trade) {
+    tradeCount++;
+
+    const tradeDiv = document.createElement('div');
+    const tradeType = trade.is_buyer_maker ? 'sell' : 'buy';
+    tradeDiv.className = `trade-item ${tradeType}`;
+
+    const time = new Date(trade.timestamp).toLocaleTimeString('fr-FR');
+
+    tradeDiv.innerHTML = `
+                <div class="trade-info">
+                    <div class="trade-price">$${trade.price.toFixed(2)}</div>
+                    <div class="trade-details">
+                        Quantité: ${trade.quantity.toFixed(4)} |
+                        ${trade.is_buyer_maker ? '🔴 Vente' : '🟢 Achat'}
+                    </div>
+                </div>
+                <div class="trade-time">${time}</div>
+            `;
+
+    tradesContainer.insertBefore(tradeDiv, tradesContainer.firstChild);
+
+    // Garder seulement les 50 derniers trades
+    while (tradesContainer.children.length > 50) {
+      tradesContainer.removeChild(tradesContainer.lastChild);
+    }
+
+    updateStats(trade.price);
+  }
+
+  function connect() {
+    const symbol = symbolSelect.value;
+    const apiUrl = apiUrlInput.value.replace(/^https?/, 'ws');
+    const wsUrl = `${apiUrl}/ws/stream/${symbol}`;
+
+    updateStatus('connecting', 'Connexion en cours...');
+    connectBtn.disabled = true;
+
+    try {
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        updateStatus('connected', `Connecté à ${symbol}`);
+        disconnectBtn.disabled = false;
+        console.log('WebSocket connected');
+      };
+
+      ws.onmessage = (event) => {
+        const trade = JSON.parse(event.data);
+        addTrade(trade);
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        updateStatus('disconnected', 'Erreur de connexion');
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+      };
+
+      ws.onclose = () => {
+        updateStatus('disconnected', 'Déconnecté');
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+        console.log('WebSocket disconnected');
+      };
+
+    } catch (error) {
+      console.error('Connection error:', error);
+      updateStatus('disconnected', 'Erreur: ' + error.message);
+      connectBtn.disabled = false;
+    }
+  }
+
+  function disconnect() {
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+  }
+
+  function clearTrades() {
+    tradesContainer.innerHTML = '<p style="text-align: center; color: #6c757d;">Aucun trade...</p>';
+    tradeCount = 0;
+    minPrice = null;
+    maxPrice = null;
+    document.getElementById('currentPrice').textContent = '-';
+    document.getElementById('tradeCount').textContent = '0';
+    document.getElementById('minPrice').textContent = '-';
+    document.getElementById('maxPrice').textContent = '-';
+  }
+
+  connectBtn.addEventListener('click', connect);
+  disconnectBtn.addEventListener('click', disconnect);
+  clearBtn.addEventListener('click', clearTrades);
+
+  // Déconnecter proprement lors de la fermeture de la page
+  window.addEventListener('beforeunload', disconnect);
+</script>
+</body>
+</html>
+

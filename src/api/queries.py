@@ -1,40 +1,53 @@
 """Query functions for MongoDB cryptocurrency data."""
 import logging
+import sys
+import os
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from pymongo.database import Database
 from pymongo.collection import Collection
 
+# Add src directory to Python path to allow imports
+src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if src_dir not in sys.path:
+  sys.path.insert(0, src_dir)
+
+from data.config import SETTINGS
+
 logger = logging.getLogger("CRYPTO_API")
 
 
-def get_symbols(db: Database, collection_name: str = "historical_daily_data") -> List[str]:
+def get_symbols(db: Database, collection_name: Optional[str] = None) -> List[str]:
   """
   Get list of available symbols in the database.
 
   Args:
       db: MongoDB database instance
-      collection_name: Name of the collection to query
+      collection_name: Name of the collection to query (defaults to SETTINGS value)
 
   Returns:
       List of unique symbols
   """
+  if collection_name is None:
+    collection_name = SETTINGS["MONGO_COLLECTION_HISTORICAL"]
   coll: Collection = db[collection_name]
   symbols = coll.distinct("symbol")
   return sorted(symbols)
 
 
-def get_intervals(db: Database, collection_name: str = "historical_daily_data") -> List[str]:
+def get_intervals(db: Database, collection_name: Optional[str] = None) -> List[str]:
   """
   Get list of available intervals in the database.
 
   Args:
       db: MongoDB database instance
-      collection_name: Name of the collection to query
+      collection_name: Name of the collection to query (defaults to SETTINGS value)
 
   Returns:
       List of unique intervals
   """
+  if collection_name is None:
+    collection_name = SETTINGS["MONGO_COLLECTION_HISTORICAL"]
   coll: Collection = db[collection_name]
   intervals = coll.distinct("interval")
   return sorted(intervals)
@@ -47,7 +60,7 @@ def get_historical_data_query(
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         limit: int = 1000,
-        collection_name: str = "historical_daily_data"
+        collection_name: Optional[str] = None
 ) -> List[Dict[str, Any]]:
   """
   Query historical cryptocurrency data from MongoDB.
@@ -59,11 +72,13 @@ def get_historical_data_query(
       start_time: Start datetime (UTC)
       end_time: End datetime (UTC)
       limit: Maximum number of records to return
-      collection_name: Name of the collection to query
+      collection_name: Name of the collection to query (defaults to SETTINGS value)
 
   Returns:
       List of historical data records
   """
+  if collection_name is None:
+    collection_name = SETTINGS["MONGO_COLLECTION_HISTORICAL"]
   coll: Collection = db[collection_name]
 
   # Build query filter
@@ -111,7 +126,7 @@ def get_latest_data(
         symbol: str,
         interval: str = "1d",
         count: int = 30,
-        collection_name: str = "historical_daily_data"
+        collection_name: Optional[str] = None
 ) -> List[Dict[str, Any]]:
   """
   Get the most recent N records for a symbol.
@@ -121,11 +136,13 @@ def get_latest_data(
       symbol: Cryptocurrency symbol (e.g., 'BTCUSDT')
       interval: Time interval (e.g., '1d', '1h')
       count: Number of recent records to return
-      collection_name: Name of the collection to query
+      collection_name: Name of the collection to query (defaults to SETTINGS value)
 
   Returns:
       List of recent historical data records
   """
+  if collection_name is None:
+    collection_name = SETTINGS["MONGO_COLLECTION_HISTORICAL"]
   coll: Collection = db[collection_name]
 
   query_filter = {
@@ -157,7 +174,7 @@ def get_aggregated_stats(
         interval: str = "1d",
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        collection_name: str = "historical_daily_data"
+        collection_name: Optional[str] = None
 ) -> Dict[str, Any]:
   """
   Get aggregated statistics for a symbol over a time range.
@@ -168,11 +185,13 @@ def get_aggregated_stats(
       interval: Time interval (e.g., '1d', '1h')
       start_time: Start datetime (UTC)
       end_time: End datetime (UTC)
-      collection_name: Name of the collection to query
+      collection_name: Name of the collection to query (defaults to SETTINGS value)
 
   Returns:
       Dictionary with aggregated statistics
   """
+  if collection_name is None:
+    collection_name = SETTINGS["MONGO_COLLECTION_HISTORICAL"]
   coll: Collection = db[collection_name]
 
   # Build match filter
