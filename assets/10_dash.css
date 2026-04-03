@@ -1,0 +1,88 @@
+/*
+ * Custom CSS for Crypto Dashboard
+ */
+
+/* ========================================
+   CARDS
+   ======================================== */
+
+.card {
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    animation: fadeIn 0.4s ease-in-out;
+}
+
+.card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* ========================================
+   BUTTONS
+   ======================================== */
+
+.btn-primary {
+    transition: all 0.2s ease;
+}
+
+.btn-primary:hover {
+    transform: scale(1.02);
+    box-shadow: 0 4px 8px rgba(52, 152, 219, 0.5);
+}
+
+/* ========================================
+   SWITCH
+   ======================================== */
+
+.form-switch .form-check-input:checked {
+    background-color: #00d4aa !important;
+    border-color: #00d4aa !important;
+}
+
+/* ========================================
+   SCROLLBAR
+   ======================================== */
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1a1a1a;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #3498db;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #2980b9;
+}
+
+/* ========================================
+   ANIMATIONS
+   ======================================== */
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ========================================
+   STREAMING SECTION
+   ======================================== */
+
+#streaming-status {
+    font-weight: bold;
+}
+
+/* ========================================
+   RESPONSIVE
+   ======================================== */
+
+@media (max-width: 768px) {
+    .card { margin-bottom: 1rem; }
+    h1 { font-size: 1.5rem !important; }
+    h5 { font-size: 1rem !important; }
+}

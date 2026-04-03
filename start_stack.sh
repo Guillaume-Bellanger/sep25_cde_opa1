@@ -81,10 +81,11 @@ while [ $elapsed -lt $max_wait ]; do
     mongo_health=$(docker inspect --format='{{.State.Health.Status}}' sep25_opa1_mongo 2>/dev/null || echo "starting")
     postgres_health=$(docker inspect --format='{{.State.Health.Status}}' sep25_opa1_postgres 2>/dev/null || echo "starting")
     api_health=$(docker inspect --format='{{.State.Health.Status}}' sep25_opa1_api 2>/dev/null || echo "starting")
+    dashboard_health=$(docker inspect --format='{{.State.Health.Status}}' sep25_opa1_dashboard 2>/dev/null || echo "starting")
 
-    echo "MongoDB: $mongo_health | PostgreSQL: $postgres_health | API: $api_health"
+    echo "MongoDB: $mongo_health | PostgreSQL: $postgres_health | API: $api_health | Dashboard: $dashboard_health"
 
-    if [ "$mongo_health" = "healthy" ] && [ "$postgres_health" = "healthy" ] && [ "$api_health" = "healthy" ]; then
+    if [ "$mongo_health" = "healthy" ] && [ "$postgres_health" = "healthy" ] && [ "$api_health" = "healthy" ] && [ "$dashboard_health" = "healthy" ]; then
         echo ""
         echo "✓ All services are healthy!"
         break
@@ -114,6 +115,7 @@ echo ""
 echo "Services available at:"
 echo "  🌐 API:              http://localhost:8000"
 echo "  📚 API Docs:         http://localhost:8000/docs"
+echo "  📊 Dashboard:        http://localhost:8050"
 echo "  💾 MongoDB:          localhost:27025"
 echo "  🐘 PostgreSQL:       localhost:5435"
 echo "  🔧 PgAdmin:          http://localhost:5436"
@@ -121,8 +123,10 @@ echo ""
 echo "Useful commands:"
 echo "  View logs:           docker-compose logs -f"
 echo "  View API logs:       docker-compose logs -f api"
+echo "  View Dashboard logs: docker-compose logs -f dashboard"
 echo "  Stop all:            docker-compose down"
 echo "  Restart API:         docker-compose restart api"
+echo "  Restart Dashboard:   docker-compose restart dashboard"
 echo ""
 echo "To populate data manually (if not done automatically):"
 echo "  docker-compose exec api python src/main.py"

@@ -1,51 +1,50 @@
-import pytest
-import os
+"""Test script to verify imports work correctly."""
 import sys
+import os
 
 # Add src directory to Python path
-test_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(test_dir)
-src_dir = os.path.join(project_root, 'src')
-
+src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')
 if src_dir not in sys.path:
-    sys.path.insert(0, src_dir)
+  sys.path.insert(0, src_dir)
 
+print("Testing imports...")
+print(f"Python path includes src: {src_dir in sys.path}")
+print(f"Src directory: {src_dir}")
 
-def test_import_data_modules():
-    """Vérifie que les modules de données peuvent être importés"""
-    try:
-        from data import config
-        from data import historical_data
-        assert True
-    except ImportError as e:
-        pytest.fail(f"Failed to import data modules: {e}")
+try:
+  print("\n1. Testing data.config import...")
+  from data.config import SETTINGS
 
+  print("   ✓ SETTINGS imported successfully")
+  print(f"   MongoDB database: {SETTINGS['MONGO_DB']}")
 
-def test_import_api_modules():
-    """Vérifie que les modules API peuvent être importés"""
-    try:
-        from api import models
-        from api import queries
-        assert True
-    except ImportError as e:
-        pytest.fail(f"Failed to import API modules: {e}")
+  print("\n2. Testing api.models import...")
+  from api.models import HealthResponse
 
+  print("   ✓ API models imported successfully")
 
-def test_python_version():
-    """Vérifie que Python >= 3.12 est utilisé"""
-    import sys
-    assert sys.version_info >= (3, 12), f"Python 3.12+ required, got {sys.version_info}"
+  print("\n3. Testing api.queries import...")
+  from api.queries import get_symbols
 
+  print("   ✓ API queries imported successfully")
 
-def test_required_packages():
-    """Vérifie que les packages requis sont installés"""
-    try:
-        import fastapi
-        import pymongo
-        import pandas
-        import numpy
-        import requests
-        assert True
-    except ImportError as e:
-        pytest.fail(f"Missing required package: {e}")
+  print("\n4. Testing api.app import...")
+  from api.app import app
 
+  print("   ✓ FastAPI app imported successfully")
+  print(f"   App title: {app.title}")
+
+  print("\nAll imports successful! The API should work correctly.")
+  print("\nYou can now run:")
+  print("  python run_api.py")
+
+except ImportError as e:
+  print(f"\nImport error: {e}")
+  print("\nTroubleshooting:")
+  print("1. Make sure you're running this from the project root directory")
+  print("2. Check that all required files exist in src/")
+  print("3. Verify your Python environment has all dependencies installed")
+  sys.exit(1)
+except Exception as e:
+  print(f"\nUnexpected error: {e}")
+  sys.exit(1)

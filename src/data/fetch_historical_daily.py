@@ -11,7 +11,6 @@ logging.basicConfig(level=logging.INFO)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 INTERVAL = "1d"
-MONGO_COLLECTION = "historical_daily_data"
 
 
 def to_utc_dt(ts: Union[int, float, str, datetime]) -> datetime:
@@ -84,7 +83,8 @@ def upsert_daily_history() -> None:
 
   client = connect_to_mongo(db_name=db_name, host=host, port=port, auth=auth, user=user, password=password)
   db = client[db_name]
-  coll = db[MONGO_COLLECTION]
+  collection_name = SETTINGS["MONGO_COLLECTION_HISTORICAL"]
+  coll = db[collection_name]
   # We make a unique index on (symbol, interval, open_time), so upserts work correctly and avoid duplicates
   coll.create_index([("symbol", 1), ("interval", 1), ("open_time", 1)], unique=True)
 

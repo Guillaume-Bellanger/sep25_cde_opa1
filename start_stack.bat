@@ -90,6 +90,7 @@ echo.
 echo Services available at:
 echo   API:              http://localhost:8000
 echo   API Docs:         http://localhost:8000/docs
+echo   Dashboard:        http://localhost:8050
 echo   MongoDB:          localhost:27025
 echo   PostgreSQL:       localhost:5435
 echo   PgAdmin:          http://localhost:5436
@@ -97,7 +98,10 @@ echo.
 echo Useful commands:
 echo   View logs:           docker-compose logs -f
 echo   View API logs:       docker-compose logs -f api
+echo   View Dashboard logs: docker-compose logs -f dashboard
 echo   Stop all:            docker-compose down
+echo   Restart API:         docker-compose restart api
+echo   Restart Dashboard:   docker-compose restart dashboard
 echo   Restart API:         docker-compose restart api
 echo.
 echo To populate data manually (if not done automatically^):
