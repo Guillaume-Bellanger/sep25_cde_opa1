@@ -20,7 +20,7 @@ services:
 
   # Base PostgreSQL
   postgres:
-    image: postgres:latest
+    image: postgres:16
     container_name: sep25_opa1_postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -60,7 +60,7 @@ services:
       dockerfile: Dockerfile
     container_name: sep25_opa1_api
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       # MongoDB settings
       MONGO_HOST: mongo

@@ -1,4 +1,4 @@
-#!/bin/bash
+!/bin/bash
 # Entrypoint script for the API container
 
 set -e

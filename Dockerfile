@@ -1,5 +1,5 @@
 # Dockerfile for the FastAPI application
-FROM python:3.14-slim
+FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app
@@ -32,6 +32,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
 
 # Use entrypoint script
-ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["/bin/bash", "entrypoint.sh"]
 
 
