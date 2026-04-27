@@ -30,6 +30,7 @@ services:
       - ${POSTGRES_PORT}:5432
     volumes:
       - pg_data:/var/lib/postgresql/data
+      - ./db/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
     networks:
       - sep25_opa1_network
     healthcheck:

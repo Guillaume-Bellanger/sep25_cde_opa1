@@ -26,7 +26,7 @@ def connect_to_postgres(db_name: str, user: str, password: str, host: str = "loc
   """
   try:
     engine = sqlalchemy.create_engine(
-      f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db_name}"
+      f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db_name}"
     )
     logger.info(f"Connected to PostgreSQL database: {db_name} at {host}:{port} as user {user}")
     return engine
