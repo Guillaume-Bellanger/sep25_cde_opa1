@@ -43,3 +43,44 @@ class HealthResponse(BaseModel):
   """Response model for health check."""
   status: str
   message: str
+  model_loaded: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# ML endpoints
+# ---------------------------------------------------------------------------
+
+class PredictResponse(BaseModel):
+  """BUY/SELL/HOLD prediction for the latest candle."""
+  symbol: str
+  signal: int
+  signal_label: str
+  confidence: float
+  price: float
+  timestamp: str
+  model_version: str
+
+
+class SignalHistoryItem(BaseModel):
+  """One row from the predictions table."""
+  id: Optional[int] = None
+  timestamp: str
+  symbol: str
+  signal: int
+  signal_label: str
+  confidence: float
+  model_version: Optional[str] = None
+
+
+class ModelMetricsResponse(BaseModel):
+  """Training metrics for one model / symbol."""
+  symbol: str
+  model_name: str
+  model_version: str
+  date_train: str
+  accuracy: float
+  f1_macro: float
+  sharpe_ratio: float
+  n_train: int
+  n_val: int
+  n_test: int

@@ -1,21 +1,31 @@
 """FastAPI application for cryptocurrency data API."""
+import json
 import logging
+import pickle
 import sys
 import os
-from datetime import datetime
-from typing import Optional, List
 from contextlib import asynccontextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+import pandas as pd
+import sqlalchemy
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from pymongo.database import Database
+from sqlalchemy import text
 import asyncio
 
-# Add src directory to Python path to allow imports
+# Add src/ to sys.path so "from data.xxx" imports resolve
 src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if src_dir not in sys.path:
   sys.path.insert(0, src_dir)
+# Add project root so predict_model internal "from src.data.xxx" imports resolve
+project_root = os.path.dirname(src_dir)
+if project_root not in sys.path:
+  sys.path.insert(0, project_root)
 
 from data.config import SETTINGS
 from data.stream_data import BinanceStreamClient
@@ -28,10 +38,13 @@ from api.queries import (
 )
 from api.models import (
   HistoricalDataResponse,
+  HealthResponse,
+  IntervalsResponse,
+  ModelMetricsResponse,
+  PredictResponse,
+  SignalHistoryItem,
   StatsResponse,
   SymbolsResponse,
-  IntervalsResponse,
-  HealthResponse
 )
 
 # Configure logging
@@ -49,11 +62,17 @@ mongo_db: Optional[Database] = None
 active_streams: dict[str, BinanceStreamClient] = {}
 websocket_connections: dict[str, List[WebSocket]] = {}
 
+# ML — PostgreSQL engine + pre-loaded models
+pg_engine: Optional[sqlalchemy.engine.Engine] = None
+loaded_models: Dict[str, Any] = {}
+SYMBOLS_ML = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+SAVED_DIR = Path(__file__).parent.parent.parent / "models" / "saved"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   """Lifespan context manager for database connections."""
-  global mongo_client, mongo_db
+  global mongo_client, mongo_db, pg_engine, loaded_models
 
   # Startup: Connect to MongoDB
   try:
@@ -79,11 +98,43 @@ async def lifespan(app: FastAPI):
     logger.error(f"Failed to connect to MongoDB: {e}")
     raise
 
+  # Startup: Connect to PostgreSQL (optional — ML endpoints require it)
+  try:
+    from data.connector.connector import connect_to_postgres
+    pg_engine = connect_to_postgres(
+      db_name=SETTINGS["POSTGRES_DB"],
+      user=SETTINGS["POSTGRES_USER"],
+      password=SETTINGS["POSTGRES_PASSWORD"],
+      host=SETTINGS["DB_HOST"],
+      port=int(SETTINGS["POSTGRES_PORT"]),
+    )
+    with pg_engine.connect() as conn:
+      conn.execute(text("SELECT 1"))
+    logger.info("Connected to PostgreSQL")
+  except Exception as e:
+    logger.warning(f"PostgreSQL unavailable — ML endpoints will return 503: {e}")
+    pg_engine = None
+
+  # Startup: Pre-load ML models from disk
+  for sym in SYMBOLS_ML:
+    pkl_path = SAVED_DIR / sym / "model.pkl"
+    if pkl_path.exists():
+      try:
+        with open(pkl_path, "rb") as f:
+          loaded_models[sym] = pickle.load(f)
+        logger.info(f"ML model loaded for {sym}")
+      except Exception as e:
+        logger.warning(f"Could not load model for {sym}: {e}")
+
   yield
 
   # Shutdown: Close streams and MongoDB connection
   for stream in active_streams.values():
     stream.stop()
+
+  if pg_engine:
+    pg_engine.dispose()
+    logger.info("Closed PostgreSQL connection")
 
   if mongo_client:
     mongo_client.close()
@@ -129,7 +180,8 @@ async def health_check():
 
     return {
       "status": "healthy",
-      "message": "All services are operational"
+      "message": "All services are operational",
+      "model_loaded": len(loaded_models) > 0,
     }
   except Exception as e:
     logger.error(f"Health check failed: {e}")
@@ -324,6 +376,139 @@ async def get_statistics(
   except Exception as e:
     logger.error(f"Error fetching statistics: {e}")
     raise HTTPException(status_code=500, detail=f"Error fetching statistics: {str(e)}")
+
+
+def _save_prediction(result: Dict[str, Any]) -> None:
+  """Persist a prediction to the predictions table (best-effort, non-blocking)."""
+  if pg_engine is None:
+    return
+  try:
+    with pg_engine.begin() as conn:
+      conn.execute(
+        text("""
+          INSERT INTO predictions (timestamp, symbol, signal, signal_label, confidence, model_version)
+          VALUES (:timestamp, :symbol, :signal, :signal_label, :confidence, :model_version)
+        """),
+        {
+          "timestamp": result["timestamp"],
+          "symbol": result["symbol"],
+          "signal": int(result["signal"]),
+          "signal_label": result["signal_label"],
+          "confidence": float(result["confidence"]),
+          "model_version": result["model_version"],
+        },
+      )
+  except Exception as e:
+    logger.warning(f"Could not save prediction to DB: {e}")
+
+
+@app.get("/predict", response_model=PredictResponse)
+async def predict_signal(
+  symbol: str = Query("BTCUSDT", description="Symbol: BTCUSDT, ETHUSDT or SOLUSDT"),
+):
+  """Generate a BUY / SELL / HOLD signal for the latest candle of a symbol."""
+  symbol = symbol.upper()
+  if symbol not in loaded_models:
+    raise HTTPException(status_code=404, detail=f"No model for {symbol}. Run train_model first.")
+  if pg_engine is None:
+    raise HTTPException(status_code=503, detail="PostgreSQL unavailable — cannot fetch latest features.")
+  try:
+    from models.predict_model import predict
+    result = predict(symbol)
+    _save_prediction(result)
+    return result
+  except (FileNotFoundError, ValueError) as e:
+    raise HTTPException(status_code=404, detail=str(e))
+  except Exception as e:
+    logger.error(f"/predict error for {symbol}: {e}")
+    raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/features")
+async def get_features(
+  symbol: str = Query("BTCUSDT", description="Symbol: BTCUSDT, ETHUSDT or SOLUSDT"),
+  limit: int = Query(100, ge=1, le=1000, description="Number of rows (most recent first)"),
+) -> List[Dict[str, Any]]:
+  """Return the latest feature rows for a symbol from PostgreSQL."""
+  symbol = symbol.upper()
+  if pg_engine is None:
+    raise HTTPException(status_code=503, detail="PostgreSQL unavailable.")
+  try:
+    df = pd.read_sql(
+      text("SELECT * FROM features WHERE symbol = :symbol ORDER BY timestamp DESC LIMIT :limit"),
+      pg_engine,
+      params={"symbol": symbol, "limit": limit},
+    )
+    if df.empty:
+      raise HTTPException(status_code=404, detail=f"No features found for {symbol}.")
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    for col in df.select_dtypes(include=["datetimetz", "datetime64[ns, UTC]", "datetime64[ns]"]).columns:
+      df[col] = df[col].astype(str)
+    return df.to_dict(orient="records")
+  except HTTPException:
+    raise
+  except Exception as e:
+    logger.error(f"/features error for {symbol}: {e}")
+    raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/signal/history", response_model=List[SignalHistoryItem])
+async def get_signal_history(
+  symbol: str = Query("BTCUSDT", description="Symbol: BTCUSDT, ETHUSDT or SOLUSDT"),
+  limit: int = Query(50, ge=1, le=500, description="Number of past signals to return"),
+) -> List[SignalHistoryItem]:
+  """Return the last N predictions for a symbol from the predictions table."""
+  symbol = symbol.upper()
+  if pg_engine is None:
+    raise HTTPException(status_code=503, detail="PostgreSQL unavailable.")
+  try:
+    df = pd.read_sql(
+      text("SELECT * FROM predictions WHERE symbol = :symbol ORDER BY timestamp DESC LIMIT :limit"),
+      pg_engine,
+      params={"symbol": symbol, "limit": limit},
+    )
+    if df.empty:
+      raise HTTPException(status_code=404, detail=f"No signal history for {symbol}.")
+    for col in df.select_dtypes(include=["datetimetz", "datetime64[ns, UTC]", "datetime64[ns]"]).columns:
+      df[col] = df[col].astype(str)
+    return df.to_dict(orient="records")
+  except HTTPException:
+    raise
+  except Exception as e:
+    logger.error(f"/signal/history error for {symbol}: {e}")
+    raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/model/metrics", response_model=List[ModelMetricsResponse])
+async def get_model_metrics(
+  symbol: Optional[str] = Query(None, description="Filter by symbol (omit for all)"),
+) -> List[ModelMetricsResponse]:
+  """Return training metrics for saved models (read from metrics.json files on disk)."""
+  targets = [symbol.upper()] if symbol else SYMBOLS_ML
+  results: List[ModelMetricsResponse] = []
+  for sym in targets:
+    json_path = SAVED_DIR / sym / "metrics.json"
+    if json_path.exists():
+      try:
+        with open(json_path) as f:
+          m = json.load(f)
+        results.append(ModelMetricsResponse(
+          symbol=m["symbol"],
+          model_name=m["model_name"],
+          model_version=m["model_version"],
+          date_train=m["date_train"],
+          accuracy=m["accuracy"],
+          f1_macro=m["f1_macro"],
+          sharpe_ratio=m["sharpe_ratio"],
+          n_train=m["n_train"],
+          n_val=m["n_val"],
+          n_test=m["n_test"],
+        ))
+      except Exception as e:
+        logger.warning(f"Could not load metrics for {sym}: {e}")
+  if not results:
+    raise HTTPException(status_code=404, detail="No metrics found for the requested symbol(s).")
+  return results
 
 
 @app.websocket("/ws/stream/{symbol}")
