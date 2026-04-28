@@ -10,7 +10,12 @@ logger = logging.getLogger("CRYPTO_BOT")
 logging.basicConfig(level=logging.INFO)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-INTERVAL = "1d"
+# Days of history to fetch per interval
+INTERVALS: Dict[str, int] = {
+    "1h": 30,    # 30 days → 720 candles/symbol
+    "4h": 90,   # 90 days → 540 candles/symbol
+    "1d": 730,  # 2 years → 730 candles/symbol
+}
 
 
 def to_utc_dt(ts: Union[int, float, str, datetime]) -> datetime:
@@ -72,43 +77,32 @@ def normalize_record(symbol: str, interval: str, item: Any) -> Dict[str, Any]:
   raise ValueError("Unsupported record format from get_historical_data")
 
 
-def upsert_daily_history() -> None:
-  """Fetch last 2 years of daily data and upsert into MongoDB."""
-  db_name = SETTINGS["MONGO_DB"]
-  host = SETTINGS["MONGO_HOST"]
-  port = int(SETTINGS["MONGO_PORT"])
-  user = SETTINGS.get("MONGO_USER", "")
-  password = SETTINGS.get("MONGO_PASSWORD", "")
-  auth = bool(user)
-
-  client = connect_to_mongo(db_name=db_name, host=host, port=port, auth=auth, user=user, password=password)
-  db = client[db_name]
-  collection_name = SETTINGS["MONGO_COLLECTION_HISTORICAL"]
-  coll = db[collection_name]
-  # We make a unique index on (symbol, interval, open_time), so upserts work correctly and avoid duplicates
-  coll.create_index([("symbol", 1), ("interval", 1), ("open_time", 1)], unique=True)
-
-  end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-  start = end - timedelta(days=730)
+def _upsert_interval(coll, interval: str, days: int) -> None:
+  """Fetch and upsert history for all symbols for a given interval."""
+  end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+  start = end - timedelta(days=days)
 
   for sym in SYMBOLS:
-    logger.info(f"Fetching {INTERVAL} history for {sym} from {start.date()} to {end.date()}")
-    records = get_historical_data(symbol=sym, interval=INTERVAL, start_time=start, end_time=end)
+    logger.info(f"Fetching {interval} history for {sym}: {start.isoformat()} → {end.isoformat()}")
+    try:
+      records = get_historical_data(symbol=sym, interval=interval, start_time=start, end_time=end)
+    except Exception as e:
+      logger.error(f"API error for {sym} {interval}: {e}")
+      continue
 
     if records.empty:
-      logger.warning(f"No data returned for {sym}")
+      logger.warning(f"No data returned for {sym} {interval}")
       continue
 
     docs: List[Dict[str, Any]] = []
-    # On parcourt les enregistrements du dataframe et on les normalise
     for _, item in records.iterrows():
       try:
-        docs.append(normalize_record(sym, INTERVAL, item.to_dict()))
+        docs.append(normalize_record(sym, interval, item.to_dict()))
       except Exception as e:
-        logger.warning(f"Skip malformed record for {sym}: {e}")
+        logger.warning(f"Skip malformed record for {sym} {interval}: {e}")
 
     if not docs:
-      logger.warning(f"No valid documents for {sym}")
+      logger.warning(f"No valid documents for {sym} {interval}")
       continue
 
     ops = [
@@ -122,6 +116,30 @@ def upsert_daily_history() -> None:
     result = coll.bulk_write(ops, ordered=False)
     upserts = getattr(result, "upserted_count", 0)
     mods = getattr(result, "modified_count", 0)
-    logger.info(f"{sym}: upserted {upserts}, modified {mods}, total {len(docs)}")
+    logger.info(f"{sym} {interval}: upserted {upserts}, modified {mods}, total {len(docs)}")
+
+
+def upsert_all_history() -> None:
+  """Fetch and upsert history for all symbols and all configured intervals into MongoDB."""
+  db_name = SETTINGS["MONGO_DB"]
+  host = SETTINGS["MONGO_HOST"]
+  port = int(SETTINGS["MONGO_PORT"])
+  user = SETTINGS.get("MONGO_USER", "")
+  password = SETTINGS.get("MONGO_PASSWORD", "")
+  auth = bool(user)
+
+  client = connect_to_mongo(db_name=db_name, host=host, port=port, auth=auth, user=user, password=password)
+  db = client[db_name]
+  coll = db[SETTINGS["MONGO_COLLECTION_HISTORICAL"]]
+  coll.create_index([("symbol", 1), ("interval", 1), ("open_time", 1)], unique=True)
+
+  for interval, days in INTERVALS.items():
+    logger.info(f"=== Interval {interval} ({days} days) ===")
+    _upsert_interval(coll, interval, days)
 
   client.close()
+
+
+def upsert_daily_history() -> None:
+  """Backward-compatible alias — now fetches all intervals."""
+  upsert_all_history()
