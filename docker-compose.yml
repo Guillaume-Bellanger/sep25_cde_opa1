@@ -83,6 +83,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./logs:/app/logs
+      - ./models:/app/models
     networks:
       - sep25_opa1_network
     depends_on:
