@@ -92,12 +92,43 @@ def predict(symbol: str) -> Dict:
     }
 
 
+def predict_demo(symbol: str) -> dict:
+    """Generate a prediction from mock features (no DB required — for testing)."""
+    model, metrics = load_model(symbol)
+    feature_cols: list = metrics["feature_cols"]
+    label_inv: dict = {int(k): int(v) for k, v in metrics["label_inv"].items()}
+
+    rng = np.random.default_rng(seed=42)
+    mock_values = rng.uniform(low=0.01, high=1.0, size=(1, len(feature_cols)))
+    # Set close to a realistic BTC price range
+    close_idx = feature_cols.index("close") if "close" in feature_cols else 3
+    mock_values[0, close_idx] = 93_000.0
+    X = pd.DataFrame(mock_values, columns=feature_cols)
+
+    proba = model.predict_proba(X)[0]
+    pred_idx = int(np.argmax(proba))
+    confidence = float(proba[pred_idx])
+    signal = label_inv[pred_idx]
+
+    return {
+        "symbol": symbol,
+        "signal": signal,
+        "signal_label": SIGNAL_NAMES[signal],
+        "confidence": round(confidence, 4),
+        "price": float(X["close"].iloc[0]),
+        "timestamp": "DEMO (no DB)",
+        "model_version": metrics["model_version"],
+    }
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Predict BUY/SELL/HOLD for a symbol")
     parser.add_argument("symbol", nargs="?", default="BTCUSDT")
+    parser.add_argument("--demo", action="store_true",
+                        help="Run with mock features (no DB required)")
     args = parser.parse_args()
 
-    result = predict(args.symbol)
+    result = predict_demo(args.symbol) if args.demo else predict(args.symbol)
     width = 42
     print(f"\n{'='*width}")
     print(f"  Symbol    : {result['symbol']}")
