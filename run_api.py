@@ -11,11 +11,14 @@ if src_dir not in sys.path:
 if __name__ == "__main__":
   import uvicorn
 
-  # Run the FastAPI app
+  # reload=True spawns a subprocess watcher; in Docker the lifespan runs in
+  # the subprocess which can be killed before completion. Disable for production.
+  reload = os.environ.get("UVICORN_RELOAD", "false").lower() == "true"
+
   uvicorn.run(
     "api.app:app",
     host="0.0.0.0",
     port=8000,
-    reload=True,  # Enable auto-reload during development
+    reload=reload,
     log_level="info"
   )

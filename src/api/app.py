@@ -62,17 +62,37 @@ mongo_db: Optional[Database] = None
 active_streams: dict[str, BinanceStreamClient] = {}
 websocket_connections: dict[str, List[WebSocket]] = {}
 
-# ML — PostgreSQL engine + pre-loaded models
+# ML — PostgreSQL engine
 pg_engine: Optional[sqlalchemy.engine.Engine] = None
-loaded_models: Dict[str, Any] = {}
 SYMBOLS_ML = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 SAVED_DIR = Path(__file__).parent.parent.parent / "models" / "saved"
+
+
+def _load_all_models() -> Dict[str, Any]:
+  """Load all saved models from disk at import time — no network dependency."""
+  models: Dict[str, Any] = {}
+  for sym in SYMBOLS_ML:
+    pkl_path = SAVED_DIR / sym / "model.pkl"
+    if pkl_path.exists():
+      try:
+        with open(pkl_path, "rb") as f:
+          models[sym] = pickle.load(f)
+        logger.info(f"ML model loaded: {sym}  ({pkl_path})")
+      except Exception as e:
+        logger.error(f"Failed to load model for {sym}: {e}")
+    else:
+      logger.warning(f"Model file not found (skipped): {pkl_path}")
+  return models
+
+
+# Loaded once at module import — independent of lifespan / DB availability
+loaded_models: Dict[str, Any] = _load_all_models()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   """Lifespan context manager for database connections."""
-  global mongo_client, mongo_db, pg_engine, loaded_models
+  global mongo_client, mongo_db, pg_engine
 
   # Startup: Connect to MongoDB
   try:
@@ -114,17 +134,6 @@ async def lifespan(app: FastAPI):
   except Exception as e:
     logger.warning(f"PostgreSQL unavailable — ML endpoints will return 503: {e}")
     pg_engine = None
-
-  # Startup: Pre-load ML models from disk
-  for sym in SYMBOLS_ML:
-    pkl_path = SAVED_DIR / sym / "model.pkl"
-    if pkl_path.exists():
-      try:
-        with open(pkl_path, "rb") as f:
-          loaded_models[sym] = pickle.load(f)
-        logger.info(f"ML model loaded for {sym}")
-      except Exception as e:
-        logger.warning(f"Could not load model for {sym}: {e}")
 
   yield
 
