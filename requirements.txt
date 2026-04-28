@@ -1,7 +1,7 @@
 requests~=2.32.5
 python-dotenv~=1.2.1
 pandas~=2.3.3
-numpy~=2.3.5
+numpy>=1.26,<2.3
 
 # MySQL / PGSql
 SQLAlchemy~=2.0.45
