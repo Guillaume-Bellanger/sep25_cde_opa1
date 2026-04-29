@@ -1,0 +1,179 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# CryptoBot ML — Pipeline GitLab CI/CD
+# Stages : lint → test → build → deploy
+#
+# Variables GitLab à configurer dans Settings → CI/CD → Variables :
+#   SSH_PRIVATE_KEY   clé SSH privée (type: File) pour le serveur de déploiement
+#   DEPLOY_HOST       IP ou hostname du serveur (ex: 192.168.1.10)
+#   DEPLOY_USER       utilisateur SSH (ex: ubuntu)
+#   DEPLOY_PATH       dossier projet sur le serveur (ex: /opt/cryptobot)
+#   MONGO_USER / MONGO_PASSWORD   identifiants MongoDB de prod
+#   BINANCE_API_KEY / BINANCE_API_SECRET   (masked)
+# ──────────────────────────────────────────────────────────────────────────────
+
+stages:
+  - lint
+  - test
+  - build
+  - deploy
+
+variables:
+  DOCKER_TLS_CERTDIR: "/certs"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  IMAGE_API: "$CI_REGISTRY_IMAGE/api:$CI_COMMIT_SHORT_SHA"
+  IMAGE_STREAMLIT: "$CI_REGISTRY_IMAGE/streamlit:$CI_COMMIT_SHORT_SHA"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LINT — ruff sur src/ (rapide, compatible flake8/isort/pyupgrade)
+# ══════════════════════════════════════════════════════════════════════════════
+lint:
+  stage: lint
+  image: python:3.12-slim
+  cache:
+    key: pip-$CI_COMMIT_REF_SLUG
+    paths:
+      - .cache/pip
+  before_script:
+    - pip install --quiet ruff
+  script:
+    - ruff check src/ --output-format=github
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TEST — unitaires (sans services externes)
+# ══════════════════════════════════════════════════════════════════════════════
+test:unit:
+  stage: test
+  image: python:3.12-slim
+  cache:
+    key: pip-$CI_COMMIT_REF_SLUG
+    paths:
+      - .cache/pip
+  variables:
+    # Pas de vraie connexion DB — config.py utilise ces valeurs via os.getenv()
+    MONGO_HOST: "localhost"
+    MONGO_PORT: "27017"
+    MONGO_DB: "cryptobot_ci"
+    MONGO_USER: "ci"
+    MONGO_PASSWORD: "ci"
+    MONGO_COLLECTION_HISTORICAL: "historical_daily_data"
+    MONGO_COLLECTION_STREAMING: "streaming_trades"
+    POSTGRES_DB: "cryptobot_ci"
+    POSTGRES_USER: "ci"
+    POSTGRES_PASSWORD: "ci"
+    DB_HOST: "localhost"
+    POSTGRES_PORT: "5432"
+    URL_HISTORIQUE: "https://api.binance.com/api/v3/klines"
+    URL_STREAM: "wss://stream.binance.com:9443/ws"
+  before_script:
+    - pip install --quiet -r requirements.txt pytest pytest-cov
+  script:
+    - pytest tests/test_config.py tests/test_imports.py
+        --tb=short
+        --cov=src
+        --cov-report=term-missing
+        --cov-report=xml:coverage.xml
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    when: always
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+
+# TEST — intégration (MongoDB + PostgreSQL comme services GitLab CI)
+# Déclenché manuellement — nécessite l'API live pour les tests e2e
+test:integration:
+  stage: test
+  image: python:3.12-slim
+  cache:
+    key: pip-$CI_COMMIT_REF_SLUG
+    paths:
+      - .cache/pip
+  services:
+    - name: mongo:7.0
+      alias: mongo
+    - name: postgres:16
+      alias: postgres
+  variables:
+    MONGO_HOST: "mongo"
+    MONGO_PORT: "27017"
+    MONGO_DB: "cryptobot_ci"
+    MONGO_USER: ""
+    MONGO_PASSWORD: ""
+    MONGO_COLLECTION_HISTORICAL: "historical_daily_data"
+    MONGO_COLLECTION_STREAMING: "streaming_trades"
+    POSTGRES_DB: "cryptobot_ci"
+    POSTGRES_USER: "postgres"
+    POSTGRES_PASSWORD: "postgres"
+    DB_HOST: "postgres"
+    POSTGRES_PORT: "5432"
+    POSTGRES_HOST_AUTH_METHOD: "trust"
+  before_script:
+    - pip install --quiet -r requirements.txt pytest
+  script:
+    - pytest tests/integration/test_api_examples.py --tb=short -m integration
+  allow_failure: true
+  when: manual
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BUILD — images Docker → registre GitLab (main et develop uniquement)
+# ══════════════════════════════════════════════════════════════════════════════
+build:api:
+  stage: build
+  image: docker:24
+  services:
+    - docker:24-dind
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - docker build -t "$IMAGE_API" -f Dockerfile .
+    - docker push "$IMAGE_API"
+    - docker tag "$IMAGE_API" "$CI_REGISTRY_IMAGE/api:latest"
+    - docker push "$CI_REGISTRY_IMAGE/api:latest"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
+
+build:streamlit:
+  stage: build
+  image: docker:24
+  services:
+    - docker:24-dind
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - docker build -t "$IMAGE_STREAMLIT" -f Dockerfile.streamlit .
+    - docker push "$IMAGE_STREAMLIT"
+    - docker tag "$IMAGE_STREAMLIT" "$CI_REGISTRY_IMAGE/streamlit:latest"
+    - docker push "$CI_REGISTRY_IMAGE/streamlit:latest"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEPLOY — SSH vers serveur de prod (manuel, main uniquement)
+# ══════════════════════════════════════════════════════════════════════════════
+deploy:production:
+  stage: deploy
+  image: alpine:3.19
+  before_script:
+    - apk add --no-cache openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+  script:
+    - |
+      ssh "$DEPLOY_USER@$DEPLOY_HOST" "
+        cd $DEPLOY_PATH &&
+        docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY &&
+        docker-compose pull &&
+        docker-compose up -d --remove-orphans
+      "
+  environment:
+    name: production
+    url: http://$DEPLOY_HOST:8501
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  needs:
+    - build:api
+    - build:streamlit
