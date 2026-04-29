@@ -26,3 +26,5 @@ dash-bootstrap-components~=2.0.4
 plotly~=6.5.2
 # Scheduler (sera remplacé par Airflow)
 schedule~=1.2.2
+# Monitoring
+prometheus-fastapi-instrumentator~=7.0.0

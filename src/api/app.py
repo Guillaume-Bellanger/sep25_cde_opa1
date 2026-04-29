@@ -13,6 +13,7 @@ import pandas as pd
 import sqlalchemy
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 from pymongo import MongoClient
 from pymongo.database import Database
 from sqlalchemy import text
@@ -166,6 +167,12 @@ app.add_middleware(
   allow_methods=["*"],
   allow_headers=["*"],
 )
+
+# Expose /metrics for Prometheus scraping
+Instrumentator(
+  should_group_status_codes=False,
+  excluded_handlers=["/metrics"],
+).instrument(app).expose(app)
 
 
 @app.get("/", response_model=HealthResponse)

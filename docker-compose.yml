@@ -125,38 +125,202 @@ services:
       retries: 3
       start_period: 30s
 
-  # Scheduler — collecte quotidienne des données Binance vers MongoDB
-  # TODO: remplacer par Apache Airflow (Sprint 5)
-  scheduler:
+  # Scheduler basique désactivé — remplacé par Apache Airflow
+  # scheduler:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.scheduler
+  #   (conservé en commentaire pour référence)
+
+  # ---------------------------------------------------------------------------
+  # Monitoring — Prometheus + Grafana
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: sep25_opa1_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - sep25_opa1_network
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: sep25_opa1_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - sep25_opa1_network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Apache Airflow — base de données de métadonnées dédiée
+  # ---------------------------------------------------------------------------
+  postgres-airflow:
+    image: postgres:16
+    container_name: sep25_opa1_postgres_airflow
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - pg_airflow_data:/var/lib/postgresql/data
+    networks:
+      - sep25_opa1_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Airflow init (one-shot) — migration DB + création utilisateur admin
+  # ---------------------------------------------------------------------------
+  airflow-init:
     build:
       context: .
-      dockerfile: Dockerfile.scheduler
-    container_name: sep25_opa1_scheduler
+      dockerfile: Dockerfile.airflow
+    container_name: sep25_opa1_airflow_init
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
     environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: sep25_opa1_secret
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - ./src:/opt/airflow/src
+      - ./models:/opt/airflow/models
+    networks:
+      - sep25_opa1_network
+    command:
+      - bash
+      - -c
+      - "airflow db migrate && airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@cryptobot.local --password admin"
+
+  # ---------------------------------------------------------------------------
+  # Airflow Webserver — UI sur http://localhost:8080  (admin / admin)
+  # ---------------------------------------------------------------------------
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    container_name: sep25_opa1_airflow_webserver
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: sep25_opa1_secret
+      # Variables applicatives transmises aux tâches Python des DAGs
       MONGO_HOST: mongo
       MONGO_PORT: 27017
       MONGO_USER: ${MONGO_USER}
       MONGO_PASSWORD: ${MONGO_PASSWORD}
       MONGO_DB: ${MONGO_DB}
       MONGO_COLLECTION_HISTORICAL: ${MONGO_COLLECTION_HISTORICAL:-historical_daily_data}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      DB_HOST: postgres
+      POSTGRES_PORT: 5432
       URL_HISTORIQUE: ${URL_HISTORIQUE:-https://api.binance.com/api/v3/klines}
-      # Heure de collecte quotidienne HH:MM UTC (défaut 01:00 = 02h/03h Paris)
-      COLLECT_TIME: ${COLLECT_TIME:-01:00}
+      PYTHONPATH: /opt/airflow
       PYTHONUNBUFFERED: 1
     volumes:
-      - ./src:/app/src
-      - ./logs:/app/logs
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - ./src:/opt/airflow/src
+      - ./models:/opt/airflow/models
+    ports:
+      - "8080:8080"
     networks:
       - sep25_opa1_network
+    command: webserver
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Airflow Scheduler — exécute les DAGs selon leur schedule
+  # ---------------------------------------------------------------------------
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    container_name: sep25_opa1_airflow_scheduler
     depends_on:
-      mongo:
+      postgres-airflow:
         condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: sep25_opa1_secret
+      # Variables applicatives transmises aux tâches Python des DAGs
+      MONGO_HOST: mongo
+      MONGO_PORT: 27017
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_DB: ${MONGO_DB}
+      MONGO_COLLECTION_HISTORICAL: ${MONGO_COLLECTION_HISTORICAL:-historical_daily_data}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      DB_HOST: postgres
+      POSTGRES_PORT: 5432
+      URL_HISTORIQUE: ${URL_HISTORIQUE:-https://api.binance.com/api/v3/klines}
+      PYTHONPATH: /opt/airflow
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - ./src:/opt/airflow/src
+      - ./models:/opt/airflow/models
+    networks:
+      - sep25_opa1_network
+    command: scheduler
     restart: unless-stopped
 
 volumes:
   pg_data:
   mongo_data:
   pgadmin_data:
+  pg_airflow_data:
+  airflow_logs:
+  prometheus_data:
+  grafana_data:
 
 networks:
   sep25_opa1_network:
