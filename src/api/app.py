@@ -527,6 +527,76 @@ async def get_model_metrics(
   return results
 
 
+# ---------------------------------------------------------------------------
+# Live prediction endpoints (real-time 1m WebSocket pipeline)
+# ---------------------------------------------------------------------------
+
+# Registry of running LivePredictor instances (one per symbol)
+live_predictors: dict = {}
+
+
+@app.post("/live/start")
+async def live_start(
+  symbol: str = Query("BTCUSDT", description="Symbol to start live prediction for"),
+):
+  """Start the live prediction service for a symbol (fetches 1m klines + opens WebSocket)."""
+  symbol = symbol.upper()
+  try:
+    from models.live_predictor import LivePredictor
+  except ImportError:
+    try:
+      import sys, os as _os
+      sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+      from models.live_predictor import LivePredictor
+    except ImportError as e:
+      raise HTTPException(status_code=500, detail=f"LivePredictor import error: {e}")
+
+  if symbol in live_predictors and live_predictors[symbol]._running:
+    return {"status": "already_running", "symbol": symbol}
+
+  try:
+    predictor = LivePredictor(symbol)
+    predictor.start()
+    live_predictors[symbol] = predictor
+    return {"status": "started", "symbol": symbol}
+  except FileNotFoundError as e:
+    raise HTTPException(status_code=404, detail=str(e))
+  except Exception as e:
+    logger.error(f"/live/start error for {symbol}: {e}")
+    raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/live/stop")
+async def live_stop(
+  symbol: str = Query("BTCUSDT", description="Symbol to stop"),
+):
+  """Stop the live prediction service for a symbol."""
+  symbol = symbol.upper()
+  if symbol not in live_predictors:
+    raise HTTPException(status_code=404, detail=f"No live predictor running for {symbol}")
+  live_predictors[symbol].stop()
+  del live_predictors[symbol]
+  return {"status": "stopped", "symbol": symbol}
+
+
+@app.get("/live/status")
+async def live_status(
+  symbol: str = Query("BTCUSDT", description="Symbol to query"),
+):
+  """Return the current live state: price, signal, confidence, score, history."""
+  symbol = symbol.upper()
+  if symbol not in live_predictors:
+    return {
+      "symbol": symbol, "running": False,
+      "live_price": 0.0, "live_time": "",
+      "signal": None,
+      "total_predictions": 0, "correct_predictions": 0,
+      "score_pct": None, "score_str": "0/0",
+      "history": [],
+    }
+  return live_predictors[symbol].get_state()
+
+
 @app.websocket("/ws/stream/{symbol}")
 async def websocket_stream(websocket: WebSocket, symbol: str):
   """

@@ -1,0 +1,66 @@
+{
+  "symbol": "ETHUSDT",
+  "timeframe": "1m",
+  "model_name": "lightgbm",
+  "model_version": "ETHUSDT_1m_lightgbm_20260430_105743",
+  "date_train": "2026-04-30T10:57:43.626254+00:00",
+  "n_train": 30099,
+  "n_val": 6451,
+  "n_test": 6450,
+  "accuracy": 0.7834,
+  "f1_macro": 0.3961,
+  "sharpe_ratio": 7.4323,
+  "threshold": 0.001,
+  "feature_cols": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "rsi_14",
+    "macd",
+    "macd_hist",
+    "macd_signal",
+    "bb_lower",
+    "bb_mid",
+    "bb_upper",
+    "bb_bandwidth",
+    "bb_percent",
+    "ema_9",
+    "ema_21",
+    "ema_55",
+    "sma_20",
+    "sma_50",
+    "sma_200",
+    "atr_14",
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "return_1h",
+    "return_4h",
+    "return_24h"
+  ],
+  "label_map": {
+    "-1": 0,
+    "0": 1,
+    "1": 2
+  },
+  "label_inv": {
+    "0": -1,
+    "1": 0,
+    "2": 1
+  },
+  "all_models": {
+    "xgboost": {
+      "accuracy": 0.787,
+      "f1_macro": 0.3922,
+      "sharpe": -6.145
+    },
+    "lightgbm": {
+      "accuracy": 0.7834,
+      "f1_macro": 0.3961,
+      "sharpe": 7.4323
+    }
+  }
+}

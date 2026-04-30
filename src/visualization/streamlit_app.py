@@ -5,6 +5,7 @@ All data is fetched from the FastAPI backend (no direct DB access).
 Set API_BASE_URL env var to point at the API (default: http://localhost:8001).
 """
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -72,13 +73,150 @@ st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "Navigation",
-    ["📈 Marché", "🤖 Signaux ML", "📊 Indicateurs", "⚙️ Modèle", "🔍 Monitoring"],
+    ["🔴 Live", "📈 Marché", "🤖 Signaux ML", "📊 Indicateurs", "⚙️ Modèle", "🔍 Monitoring"],
 )
+
+# ---------------------------------------------------------------------------
+# Page : Live
+# ---------------------------------------------------------------------------
+if page == "🔴 Live":
+    st.title("🔴 Live — Prédictions temps réel (1m)")
+
+    col_sym, col_ctrl, col_refresh = st.columns([2, 1, 1])
+    symbol = col_sym.selectbox("Symbole", SYMBOLS, key="live_sym")
+
+    # Fetch current status
+    status = api_get_live("/live/status", {"symbol": symbol}) or {}
+    running = status.get("running", False)
+
+    with col_ctrl:
+        st.write("")
+        if not running:
+            if st.button("▶ Démarrer", key="live_start"):
+                try:
+                    r = requests.post(
+                        f"{API_BASE_URL}/live/start",
+                        params={"symbol": symbol},
+                        timeout=30,
+                    )
+                    r.raise_for_status()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erreur démarrage : {e}")
+        else:
+            if st.button("⏹ Arrêter", key="live_stop"):
+                try:
+                    requests.post(
+                        f"{API_BASE_URL}/live/stop",
+                        params={"symbol": symbol},
+                        timeout=10,
+                    )
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erreur arrêt : {e}")
+
+    with col_refresh:
+        st.write("")
+        auto_refresh = st.toggle("Auto-refresh 5s", value=True, key="live_auto")
+
+    st.markdown("---")
+
+    if not running:
+        st.info(
+            "Le prédicteur live n'est pas démarré. "
+            "Cliquez **▶ Démarrer** pour lancer le flux WebSocket Binance 1m."
+        )
+    else:
+        live_price = status.get("live_price", 0.0)
+        live_time  = status.get("live_time", "")
+        sig        = status.get("signal") or {}
+        score_str  = status.get("score_str", "0/0")
+        score_pct  = status.get("score_pct")
+        total      = status.get("total_predictions", 0)
+
+        # ── Top KPIs ──────────────────────────────────────────────────────
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Prix live", f"${live_price:,.2f}" if live_price else "–")
+        k2.metric("Timestamp", live_time[11:19] if live_time else "–")
+        k3.metric("Score", score_str,
+                  delta=f"{score_pct}%" if score_pct is not None else None)
+        k4.metric("Prédictions évaluées", str(total))
+
+        # ── Signal courant ────────────────────────────────────────────────
+        st.markdown("### Signal actuel")
+        if sig:
+            label      = sig.get("signal_label", "–")
+            confidence = sig.get("confidence", 0.0)
+            sig_price  = sig.get("price", 0.0)
+            sig_time   = str(sig.get("timestamp", ""))[:19]
+            color      = SIGNAL_COLOR.get(label, "#555555")
+
+            st.markdown(
+                f'<div style="background:{color};padding:18px 24px;border-radius:12px;'
+                f'text-align:center;margin-bottom:12px;">'
+                f'<h1 style="color:white;margin:0;font-size:2.6rem;">{label}</h1>'
+                f'<p style="color:white;margin:6px 0 0;font-size:1.1rem;">'
+                f'Confiance : <strong>{confidence:.1%}</strong> &nbsp;|&nbsp; '
+                f'Prix : <strong>${sig_price:,.2f}</strong> &nbsp;|&nbsp; '
+                f'à <strong>{sig_time[11:] if sig_time else "–"}</strong></p></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.warning(
+                "En attente du premier signal (la première bougie de 1m doit se fermer…)"
+            )
+
+        # ── Historique des prédictions ────────────────────────────────────
+        st.markdown("### Historique (10 dernières prédictions)")
+        history = status.get("history", [])
+        if history:
+            rows = []
+            for h in reversed(history):
+                evaluated = h.get("evaluated", False)
+                correct   = h.get("correct")
+                ret_pct   = h.get("actual_ret_pct")
+                rows.append({
+                    "Heure":       str(h.get("timestamp", ""))[:19],
+                    "Signal":      h.get("signal_label", ""),
+                    "Conf.":       f"{h.get('confidence', 0):.1%}",
+                    "Prix":        f"${h.get('price', 0):,.2f}",
+                    "Évalué":      "✓" if evaluated else "…",
+                    "Correct":     ("✅" if correct else "❌") if evaluated else "–",
+                    "Δ prix (%)":  f"{ret_pct:+.3f}" if ret_pct is not None else "–",
+                })
+            df_hist = pd.DataFrame(rows)
+
+            # Colour-code the Signal column via a bar-chart axis trick
+            st.dataframe(df_hist, use_container_width=True, hide_index=True)
+
+            # Mini bar chart: confidence by prediction
+            fig_hist = go.Figure(go.Bar(
+                x=list(range(len(history))),
+                y=[h.get("confidence", 0) for h in history],
+                marker_color=[SIGNAL_COLOR.get(h.get("signal_label", ""), "#888") for h in history],
+                text=[h.get("signal_label", "") for h in history],
+                textposition="outside",
+            ))
+            fig_hist.update_layout(
+                title="Confiance des dernières prédictions",
+                yaxis_range=[0, 1.2], yaxis_title="Confidence",
+                height=240, template="plotly_dark",
+                margin=dict(l=0, r=0, t=40, b=0),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+        else:
+            st.info("En attente des premières prédictions…")
+
+    # ── Auto-refresh ──────────────────────────────────────────────────────
+    if running and auto_refresh:
+        time.sleep(5)
+        st.rerun()
 
 # ---------------------------------------------------------------------------
 # Page : Marché
 # ---------------------------------------------------------------------------
-if page == "📈 Marché":
+elif page == "📈 Marché":
     st.title("📈 Marché")
 
     c1, c2, c3 = st.columns(3)
