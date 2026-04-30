@@ -65,21 +65,140 @@ def api_get_live(endpoint: str, params: Optional[Dict] = None) -> Any:
         return None
 
 # ---------------------------------------------------------------------------
-# Sidebar
+# Sidebar — redirect handler (must run before any widget with key="nav")
 # ---------------------------------------------------------------------------
+if "goto" in st.session_state:
+    st.session_state["nav"] = st.session_state.pop("goto")
+
 st.sidebar.title("📊 CryptoBot ML")
 st.sidebar.caption(f"API : `{API_BASE_URL}`")
 st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "Navigation",
-    ["🔴 Live", "📈 Marché", "🤖 Signaux ML", "📊 Indicateurs", "⚙️ Modèle", "🔍 Monitoring"],
+    ["🎯 Démo", "🔴 Live", "📈 Marché", "🤖 Signaux ML", "📊 Indicateurs", "⚙️ Modèle", "🔍 Monitoring"],
+    key="nav",
 )
+
+# ---------------------------------------------------------------------------
+# Page : Démo
+# ---------------------------------------------------------------------------
+if page == "🎯 Démo":
+    st.title("🎯 Démo — CryptoBot ML")
+    st.caption("Vue d'ensemble pour la soutenance — tous les services en un clin d'œil.")
+
+    # ── 1. Accès rapide ──────────────────────────────────────────────────────
+    st.markdown("### Accès rapide")
+    btn1, btn2, btn3, btn4 = st.columns(4)
+    btn1.link_button("🌊 Airflow",     "http://localhost:8080",      use_container_width=True)
+    btn2.link_button("📊 Grafana",     "http://localhost:3000",      use_container_width=True)
+    btn3.link_button("📖 Swagger API", "http://localhost:8001/docs", use_container_width=True)
+    btn4.link_button("🔬 Prometheus",  "http://localhost:9090",      use_container_width=True)
+
+    st.markdown("---")
+
+    # ── 2. Signaux ML BTC / ETH / SOL ────────────────────────────────────────
+    hd, refresh_btn = st.columns([5, 1])
+    hd.markdown("### Signaux ML actuels — BTC · ETH · SOL")
+    with refresh_btn:
+        st.write("")
+        if st.button("🔄", help="Actualiser les signaux", key="demo_refresh"):
+            st.rerun()
+
+    col_btc, col_eth, col_sol = st.columns(3)
+
+    def _signal_card(col, sym: str) -> None:
+        with col:
+            pred = api_get_live("/predict", {"symbol": sym})
+            if pred:
+                label  = pred.get("signal_label", "–")
+                conf   = pred.get("confidence", 0.0)
+                price  = pred.get("price", 0.0)
+                color  = SIGNAL_COLOR.get(label, "#444")
+                model  = pred.get("model_version", "")
+                # algo tag: xgboost → XGB, lightgbm → LGB
+                algo   = "XGB" if "xgboost" in model else ("LGB" if "lgb" in model else "ML")
+                st.markdown(
+                    f'<div style="background:{color};border-radius:12px;padding:20px 16px;'
+                    f'text-align:center;margin-bottom:4px;">'
+                    f'<div style="color:rgba(255,255,255,0.75);font-size:0.8rem;'
+                    f'font-weight:700;letter-spacing:1px;">{sym}</div>'
+                    f'<div style="color:white;font-size:2.4rem;font-weight:800;'
+                    f'line-height:1.1;margin:6px 0 4px;">{label}</div>'
+                    f'<div style="color:white;font-size:1rem;">'
+                    f'<strong>{conf:.1%}</strong> confiance</div>'
+                    f'<div style="color:rgba(255,255,255,0.8);font-size:0.9rem;'
+                    f'margin-top:6px;">${price:,.2f}</div>'
+                    f'<div style="color:rgba(255,255,255,0.55);font-size:0.72rem;'
+                    f'margin-top:4px;">{algo}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f'<div style="background:#2a2a2a;border:1px solid #444;border-radius:12px;'
+                    f'padding:20px 16px;text-align:center;">'
+                    f'<div style="color:#888;font-size:0.8rem;font-weight:700;">{sym}</div>'
+                    f'<div style="color:#555;font-size:2rem;margin:8px 0;">–</div>'
+                    f'<div style="color:#666;font-size:0.8rem;">indisponible</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+    for col, sym in [(col_btc, "BTCUSDT"), (col_eth, "ETHUSDT"), (col_sol, "SOLUSDT")]:
+        _signal_card(col, sym)
+
+    st.markdown("---")
+
+    # ── 3. Métriques clés des modèles ────────────────────────────────────────
+    st.markdown("### Métriques des modèles")
+    metrics = api_get("/model/metrics")
+    if metrics:
+        m_cols = st.columns(len(metrics))
+        for col, m in zip(m_cols, metrics):
+            with col:
+                st.markdown(
+                    f'<div style="background:#1e1e2e;border:1px solid #333;border-radius:10px;'
+                    f'padding:14px 16px;text-align:center;">'
+                    f'<div style="color:#aaa;font-size:0.78rem;font-weight:700;letter-spacing:1px;">'
+                    f'{m["symbol"]}</div>'
+                    f'<div style="color:white;font-size:0.8rem;margin:4px 0 10px;">'
+                    f'{m["model_name"].upper()}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                ma, mb, mc = st.columns(3)
+                ma.metric("Sharpe", f"{m['sharpe_ratio']:.2f}")
+                mb.metric("F1",     f"{m['f1_macro']:.3f}")
+                mc.metric("Acc.",   f"{m['accuracy']:.1%}")
+                st.caption(f"Entraîné le {m['date_train'][:10]}")
+    else:
+        st.info("Métriques indisponibles — vérifiez que l'API est démarrée.")
+
+    st.markdown("---")
+
+    # ── 4. Raccourci vers la page Live ───────────────────────────────────────
+    st.markdown("### Démo temps réel")
+    live_col, info_col = st.columns([1, 2])
+    with live_col:
+        if st.button(
+            "🔴 Ouvrir la page Live",
+            use_container_width=True,
+            type="primary",
+            key="demo_go_live",
+        ):
+            st.session_state["goto"] = "🔴 Live"
+            st.rerun()
+    with info_col:
+        st.info(
+            "Flux WebSocket Binance **1 minute** — signal BUY/SELL/HOLD en continu, "
+            "confiance, prix live et **score de précision** en direct."
+        )
 
 # ---------------------------------------------------------------------------
 # Page : Live
 # ---------------------------------------------------------------------------
-if page == "🔴 Live":
+elif page == "🔴 Live":
     st.title("🔴 Live — Prédictions temps réel (1m)")
 
     col_sym, col_ctrl, col_refresh = st.columns([2, 1, 1])
